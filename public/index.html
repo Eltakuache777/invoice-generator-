@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreelanceKit - Free invoice builder + AI contract generator</title>
+<meta name="description" content="Build a professional invoice for free and generate a plain-English freelance contract or SOW with AI.">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="hero no-print">
+    <div class="wrap">
+      <div class="brand">Freelance<span>Kit</span></div>
+      <h1>Invoices &amp; contracts for freelancers, done in minutes</h1>
+      <p class="sub">Build a clean, printable invoice for free. Generate a plain-English service contract or SOW with AI when you need one.</p>
+      <div class="tabs">
+        <button class="tab active" data-tab="invoice">Invoice Builder (free)</button>
+        <button class="tab" data-tab="contract">Contract Generator</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- INVOICE BUILDER -->
+    <section id="invoicePane">
+      <div class="card no-print">
+        <div class="grid2">
+          <div>
+            <label>Your business name</label>
+            <input id="bizName" placeholder="Jordan Smith Design Co.">
+            <label>Your email / contact</label>
+            <input id="bizContact" placeholder="jordan@example.com">
+          </div>
+          <div>
+            <label>Bill to (client)</label>
+            <input id="clientName" placeholder="Acme Corp">
+            <label>Client email / contact</label>
+            <input id="clientContact" placeholder="ap@acme.com">
+          </div>
+        </div>
+        <div class="grid3">
+          <div><label>Invoice #</label><input id="invNum" value="1001"></div>
+          <div><label>Invoice date</label><input id="invDate" type="date"></div>
+          <div><label>Due date</label><input id="dueDate" type="date"></div>
+        </div>
+
+        <label style="margin-top:18px;">Line items</label>
+        <table class="items" id="itemsTable">
+          <thead><tr><th>Description</th><th>Qty</th><th>Rate ($)</th><th>Amount</th><th></th></tr></thead>
+          <tbody id="itemsBody"></tbody>
+        </table>
+        <button id="addItemBtn" class="btn ghost small">+ Add line item</button>
+
+        <div class="grid2" style="margin-top:18px;">
+          <div>
+            <label>Notes / payment instructions</label>
+            <textarea id="invNotes" placeholder="Thank you for your business! Payment due within 15 days. Pay via bank transfer to..."></textarea>
+          </div>
+          <div>
+            <label>Tax rate (%, optional)</label>
+            <input id="taxRate" type="number" value="0" min="0" step="0.1">
+            <div class="totals" id="totalsBox"></div>
+          </div>
+        </div>
+        <button id="printBtn" class="btn primary">Preview &amp; Download PDF →</button>
+      </div>
+    </section>
+
+    <!-- CONTRACT GENERATOR -->
+    <section id="contractPane" style="display:none;">
+      <div id="freeBanner" class="banner no-print"></div>
+      <div class="card no-print">
+        <div class="grid2">
+          <div>
+            <label>Your name / business</label>
+            <input id="yourName" placeholder="Jordan Smith">
+            <label>Client name</label>
+            <input id="clientNameC" placeholder="Acme Corp">
+            <label>Contract type</label>
+            <select id="contractType">
+              <option value="sow">Freelance services agreement / SOW</option>
+              <option value="retainer">Monthly retainer agreement</option>
+              <option value="nda">Mutual NDA</option>
+            </select>
+          </div>
+          <div>
+            <label>Describe the work</label>
+            <textarea id="workDescription" placeholder="e.g. Design and build a 5-page marketing website in Webflow, including one round of revisions, delivered within 3 weeks."></textarea>
+            <label>Payment terms (optional — leave blank for sensible defaults)</label>
+            <input id="paymentTerms" placeholder="e.g. $3,000 total, 50% upfront, 50% on delivery">
+          </div>
+        </div>
+        <button id="genContractBtn" class="btn primary">Generate contract →</button>
+        <div id="errorBox" class="error" style="display:none;"></div>
+      </div>
+
+      <section id="contractResult" class="card" style="display:none;">
+        <div id="contractOut" class="output"></div>
+        <div class="output-actions no-print">
+          <button id="copyBtn" class="btn ghost">Copy text</button>
+          <button id="downloadBtn" class="btn ghost">Download .txt</button>
+        </div>
+      </section>
+
+      <section id="payCard" class="card pay no-print" style="display:none;">
+        <h2>You're out of free contract generations for today</h2>
+        <p>Get <span id="packCredits">15</span> more for <span id="packPrice">$12</span> &mdash; no subscription.</p>
+        <button id="buyBtn" class="btn primary">Buy credits →</button>
+      </section>
+    </section>
+
+    <footer class="footer no-print">
+      <p>The contract generator is an AI drafting tool, not a lawyer — have a professional review any contract before relying on it for high-value work.</p>
+    </footer>
+  </main>
+
+  <!-- Printable invoice, hidden until Preview is clicked -->
+  <div id="printArea" class="print-only"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
