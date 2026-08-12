@@ -7,6 +7,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     tab.classList.add('active');
     const which = tab.dataset.tab;
     $('#invoicePane').style.display = which === 'invoice' ? 'block' : 'none';
+    $('#receiptPane').style.display = which === 'receipt' ? 'block' : 'none';
     $('#contractPane').style.display = which === 'contract' ? 'block' : 'none';
   });
 });
@@ -93,6 +94,81 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+/* ---------- Receipt generator (free, all client-side) ---------- */
+function addItemRowR(desc = '', qty = 1, rate = 0) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="i-desc" value="${desc}" placeholder="Consulting session"></td>
+    <td><input class="i-qty" type="number" min="0" step="1" value="${qty}" style="width:70px;"></td>
+    <td><input class="i-rate" type="number" min="0" step="0.01" value="${rate}" style="width:90px;"></td>
+    <td class="amt i-amt">$0.00</td>
+    <td><button class="rm" title="remove">✕</button></td>
+  `;
+  tr.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', recalcTotalsR));
+  tr.querySelector('.rm').addEventListener('click', () => {
+    tr.remove();
+    recalcTotalsR();
+  });
+  $('#itemsBodyR').appendChild(tr);
+  recalcTotalsR();
+}
+
+function recalcTotalsR() {
+  let subtotal = 0;
+  document.querySelectorAll('#itemsBodyR tr').forEach((tr) => {
+    const qty = parseFloat(tr.querySelector('.i-qty').value) || 0;
+    const rate = parseFloat(tr.querySelector('.i-rate').value) || 0;
+    const amt = qty * rate;
+    tr.querySelector('.i-amt').textContent = '$' + amt.toFixed(2);
+    subtotal += amt;
+  });
+  const taxRate = parseFloat($('#recTaxRate').value) || 0;
+  const tax = subtotal * (taxRate / 100);
+  const total = subtotal + tax;
+  $('#totalsBoxR').innerHTML = `
+    <div><span>Subtotal</span><span>$${subtotal.toFixed(2)}</span></div>
+    <div><span>Tax (${taxRate}%)</span><span>$${tax.toFixed(2)}</span></div>
+    <div class="grand"><span>Amount paid</span><span>$${total.toFixed(2)}</span></div>
+  `;
+  return { subtotal, tax, total };
+}
+
+$('#addItemBtnR').addEventListener('click', () => addItemRowR());
+$('#recTaxRate').addEventListener('input', recalcTotalsR);
+addItemRowR('Consulting session', 1, 150);
+
+$('#printBtnR').addEventListener('click', () => {
+  const { subtotal, tax, total } = recalcTotalsR();
+  const rows = Array.from(document.querySelectorAll('#itemsBodyR tr')).map((tr) => {
+    const desc = tr.querySelector('.i-desc').value || '';
+    const qty = tr.querySelector('.i-qty').value || '0';
+    const rate = parseFloat(tr.querySelector('.i-rate').value) || 0;
+    const amt = (parseFloat(qty) || 0) * rate;
+    return `<tr><td>${escapeHtml(desc)}</td><td>${qty}</td><td>$${rate.toFixed(2)}</td><td>$${amt.toFixed(2)}</td></tr>`;
+  }).join('');
+
+  const html = `
+    <div class="print-invoice">
+      <h1>Receipt ${escapeHtml($('#recNum').value)}</h1>
+      <p><strong>Received by:</strong> ${escapeHtml($('#recBizName').value)}${$('#recBizContact').value ? ' — ' + escapeHtml($('#recBizContact').value) : ''}</p>
+      <p><strong>Received from:</strong> ${escapeHtml($('#recFromName').value)}${$('#recFromContact').value ? ' — ' + escapeHtml($('#recFromContact').value) : ''}</p>
+      <p><strong>Date:</strong> ${escapeHtml($('#recDate').value || '')} &nbsp;&nbsp; <strong>Payment method:</strong> ${escapeHtml($('#recMethod').value)}</p>
+      <table>
+        <thead><tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="totals-print">
+        <div><span>Subtotal</span><span>$${subtotal.toFixed(2)}</span></div>
+        <div><span>Tax</span><span>$${tax.toFixed(2)}</span></div>
+        <div class="grand-print"><span>Amount paid</span><span>$${total.toFixed(2)}</span></div>
+      </div>
+      ${$('#recNotes').value ? `<p style="margin-top:24px;white-space:pre-wrap;">${escapeHtml($('#recNotes').value)}</p>` : ''}
+    </div>
+  `;
+  $('#printArea').innerHTML = html;
+  setTimeout(() => window.print(), 50);
+});
 
 /* ---------- Contract generator (free daily limit, then paid credits) ---------- */
 let config = { freeDaily: 1, packPrice: 12, packCredits: 15 };
