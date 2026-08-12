@@ -15,7 +15,10 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_missing', { 
 const FREE_DAILY = parseInt(process.env.FREE_DAILY_GENERATIONS || '1', 10);
 const PACK_PRICE = parseInt(process.env.CREDIT_PACK_PRICE_USD || '12', 10);
 const PACK_CREDITS = parseInt(process.env.CREDIT_PACK_CREDITS || '15', 10);
+const SUB_PRICE = parseInt(process.env.SUB_PRICE_USD || '20', 10);
 const PUBLIC_URL = (process.env.PUBLIC_URL || 'http://localhost:3001').replace(/\/$/, '');
+
+const ACTIVE_SUB_STATUSES = ['active', 'trialing'];
 
 function getClientIp(req) {
   return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
@@ -25,7 +28,7 @@ function getClientIp(req) {
 }
 
 app.get('/api/config', (req, res) => {
-  res.json({ freeDaily: FREE_DAILY, packPrice: PACK_PRICE, packCredits: PACK_CREDITS });
+  res.json({ freeDaily: FREE_DAILY, packPrice: PACK_PRICE, packCredits: PACK_CREDITS, subPrice: SUB_PRICE });
 });
 
 app.post('/api/generate-contract', async (req, res) => {
@@ -107,7 +110,7 @@ app.post('/api/checkout', async (req, res) => {
           quantity: 1
         }
       ],
-      success_url: `${PUBLIC_URL}/?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${PUBLIC_URL}/?purchase=credits&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${PUBLIC_URL}/`
     });
     res.json({ url: session.url });
@@ -130,6 +133,66 @@ app.get('/api/verify-session', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not verify payment.' });
+  }
+});
+
+// Invoice Builder + Receipt Generator are gated behind this $20/mo subscription.
+// The Contract Generator is unaffected - it stays on the free-daily-limit + credit-pack model above.
+app.post('/api/subscribe', async (req, res) => {
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(500).json({ error: 'Stripe is not configured yet.' });
+    }
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: { name: 'FreelanceKit Pro - Invoice & Receipt tools' },
+            recurring: { interval: 'month' },
+            unit_amount: SUB_PRICE * 100
+          },
+          quantity: 1
+        }
+      ],
+      success_url: `${PUBLIC_URL}/?purchase=sub&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${PUBLIC_URL}/`
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not start checkout. Double check your Stripe secret key.' });
+  }
+});
+
+app.get('/api/verify-subscription', async (req, res) => {
+  try {
+    const { session_id } = req.query;
+    if (!session_id) return res.status(400).json({ error: 'Missing session_id' });
+    const session = await stripe.checkout.sessions.retrieve(session_id, { expand: ['subscription'] });
+    const sub = session.subscription;
+    if (sub && ACTIVE_SUB_STATUSES.includes(sub.status)) {
+      const licenseKey = store.createSubscriptionForSession(session_id, sub.id);
+      return res.json({ active: true, licenseKey });
+    }
+    res.json({ active: false });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not verify subscription.' });
+  }
+});
+
+app.get('/api/subscription-status', async (req, res) => {
+  try {
+    const { licenseKey } = req.query;
+    const subId = licenseKey ? store.getStripeSubscriptionId(licenseKey) : null;
+    if (!subId) return res.json({ active: false });
+    const sub = await stripe.subscriptions.retrieve(subId);
+    res.json({ active: ACTIVE_SUB_STATUSES.includes(sub.status) });
+  } catch (err) {
+    console.error(err);
+    res.json({ active: false });
   }
 });
 

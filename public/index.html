@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FreelanceKit - Free invoice builder + AI contract generator</title>
-<meta name="description" content="Build a professional invoice for free and generate a plain-English freelance contract or SOW with AI.">
+<title>FreelanceKit - Invoices, receipts &amp; AI-drafted contracts for freelancers</title>
+<meta name="description" content="Invoice and receipt tools for $20/month, plus a free AI-drafted freelance contract or SOW every day.">
 
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32">
@@ -12,14 +12,14 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
 <meta property="og:type" content="website">
-<meta property="og:title" content="FreelanceKit - Free invoice builder + AI contract generator">
-<meta property="og:description" content="Build a professional invoice for free and generate a plain-English freelance contract or SOW with AI.">
+<meta property="og:title" content="FreelanceKit - Invoices, receipts & AI-drafted contracts for freelancers">
+<meta property="og:description" content="Invoice and receipt tools for $20/month, plus a free AI-drafted freelance contract or SOW every day.">
 <meta property="og:image" content="https://invoice-generator-3cb2.onrender.com/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="FreelanceKit - Free invoice builder + AI contract generator">
-<meta name="twitter:description" content="Build a professional invoice for free and generate a plain-English freelance contract or SOW with AI.">
+<meta name="twitter:title" content="FreelanceKit - Invoices, receipts & AI-drafted contracts for freelancers">
+<meta name="twitter:description" content="Invoice and receipt tools for $20/month, plus a free AI-drafted freelance contract or SOW every day.">
 <meta name="twitter:image" content="https://invoice-generator-3cb2.onrender.com/og-image.png">
 
 <link rel="stylesheet" href="/style.css">
@@ -29,10 +29,10 @@
     <div class="wrap">
       <div class="brand">Freelance<span>Kit</span></div>
       <h1>Invoices &amp; contracts for freelancers, done in minutes</h1>
-      <p class="sub">Build a clean, printable invoice for free. Generate a plain-English service contract or SOW with AI when you need one.</p>
+      <p class="sub">Build clean, printable invoices and receipts with FreelanceKit Pro. Generate a plain-English service contract or SOW with AI — one free draft a day.</p>
       <div class="tabs">
-        <button class="tab active" data-tab="invoice">Invoice Builder (free)</button>
-        <button class="tab" data-tab="receipt">Receipt Generator (free)</button>
+        <button class="tab active" data-tab="invoice">Invoice Builder</button>
+        <button class="tab" data-tab="receipt">Receipt Generator</button>
         <button class="tab" data-tab="contract">Contract Generator</button>
       </div>
     </div>
@@ -41,7 +41,12 @@
   <main class="wrap">
     <!-- INVOICE BUILDER -->
     <section id="invoicePane">
-      <div class="card no-print">
+      <section id="invoiceLocked" class="card pay no-print">
+        <h2>Invoice Builder is part of FreelanceKit Pro</h2>
+        <p>Unlimited invoices &amp; receipts for <span class="subPrice">$20</span>/month &mdash; no per-invoice fees.</p>
+        <button class="btn primary sub-btn">Subscribe →</button>
+      </section>
+      <div class="card no-print" id="invoiceForm" style="display:none;">
         <div class="grid2">
           <div>
             <label>Your business name</label>
@@ -86,7 +91,12 @@
 
     <!-- RECEIPT GENERATOR -->
     <section id="receiptPane" style="display:none;">
-      <div class="card no-print">
+      <section id="receiptLocked" class="card pay no-print">
+        <h2>Receipt Generator is part of FreelanceKit Pro</h2>
+        <p>Unlimited invoices &amp; receipts for <span class="subPrice">$20</span>/month &mdash; no per-receipt fees.</p>
+        <button class="btn primary sub-btn">Subscribe →</button>
+      </section>
+      <div class="card no-print" id="receiptForm" style="display:none;">
         <div class="grid2">
           <div>
             <label>Received by (your business)</label>

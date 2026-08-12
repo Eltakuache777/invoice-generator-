@@ -1,5 +1,55 @@
 const $ = (sel) => document.querySelector(sel);
 
+/* ---------- Pro subscription gate (Invoice Builder + Receipt Generator) ---------- */
+function getSubLicenseKey() { return localStorage.getItem('fk_sub_license') || ''; }
+function setSubLicenseKey(k) { localStorage.setItem('fk_sub_license', k); }
+function clearSubLicenseKey() { localStorage.removeItem('fk_sub_license'); }
+
+function renderSubGate(active) {
+  $('#invoiceForm').style.display = active ? 'block' : 'none';
+  $('#invoiceLocked').style.display = active ? 'none' : 'block';
+  $('#receiptForm').style.display = active ? 'block' : 'none';
+  $('#receiptLocked').style.display = active ? 'none' : 'block';
+}
+
+async function checkSubscription() {
+  const key = getSubLicenseKey();
+  if (!key) {
+    renderSubGate(false);
+    return;
+  }
+  try {
+    const r = await fetch('/api/subscription-status?licenseKey=' + encodeURIComponent(key));
+    const data = await r.json();
+    if (!data.active) clearSubLicenseKey();
+    renderSubGate(!!data.active);
+  } catch (e) {
+    // Network hiccup: don't lock out someone who's already paid based on a failed check.
+    renderSubGate(true);
+  }
+}
+
+document.querySelectorAll('.sub-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Redirecting...';
+    try {
+      const r = await fetch('/api/subscribe', { method: 'POST' });
+      const data = await r.json();
+      if (data.url) window.location.href = data.url;
+      else {
+        alert(data.error || 'Could not start checkout.');
+        btn.disabled = false;
+        btn.textContent = 'Subscribe →';
+      }
+    } catch (e) {
+      alert('Network error starting checkout.');
+      btn.disabled = false;
+      btn.textContent = 'Subscribe →';
+    }
+  });
+});
+
 /* ---------- Tabs ---------- */
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -185,6 +235,7 @@ async function loadConfig() {
     config = await r.json();
     $('#packCredits').textContent = config.packCredits;
     $('#packPrice').textContent = '$' + config.packPrice;
+    document.querySelectorAll('.subPrice').forEach((el) => (el.textContent = '$' + config.subPrice));
     renderBanner();
   } catch (e) {}
 }
@@ -204,13 +255,25 @@ async function handleSuccessRedirect() {
   const params = new URLSearchParams(window.location.search);
   const sessionId = params.get('session_id');
   if (!sessionId) return;
+  const purchase = params.get('purchase');
+
   try {
-    const r = await fetch('/api/verify-session?session_id=' + encodeURIComponent(sessionId));
-    const data = await r.json();
-    if (data.paid && data.licenseKey) {
-      setLicenseKey(data.licenseKey);
-      alert(`Payment received! ${data.credits} credits added to this browser. Save code ${data.licenseKey} in case you switch devices.`);
-      document.querySelector('.tab[data-tab="contract"]').click();
+    if (purchase === 'sub') {
+      const r = await fetch('/api/verify-subscription?session_id=' + encodeURIComponent(sessionId));
+      const data = await r.json();
+      if (data.active && data.licenseKey) {
+        setSubLicenseKey(data.licenseKey);
+        renderSubGate(true);
+        alert('Subscription active! Invoice Builder and Receipt Generator are now unlocked on this browser.');
+      }
+    } else {
+      const r = await fetch('/api/verify-session?session_id=' + encodeURIComponent(sessionId));
+      const data = await r.json();
+      if (data.paid && data.licenseKey) {
+        setLicenseKey(data.licenseKey);
+        alert(`Payment received! ${data.credits} credits added to this browser. Save code ${data.licenseKey} in case you switch devices.`);
+        document.querySelector('.tab[data-tab="contract"]').click();
+      }
     }
   } catch (e) { console.error(e); }
   window.history.replaceState({}, '', window.location.pathname);
@@ -307,4 +370,5 @@ $('#buyBtn').addEventListener('click', async () => {
 });
 
 loadConfig();
+checkSubscription();
 handleSuccessRedirect();
