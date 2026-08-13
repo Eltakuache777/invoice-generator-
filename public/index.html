@@ -27,6 +27,16 @@
 <body>
   <header class="hero no-print">
     <div class="wrap">
+      <div class="account-bar">
+        <form id="loginForm" class="account-form">
+          <input id="loginEmail" type="email" placeholder="you@example.com" required>
+          <button type="submit" class="btn ghost small">Email me a login link</button>
+        </form>
+        <div id="accountInfo" class="account-info" style="display:none;">
+          <span id="accountEmailLabel"></span>
+          <button id="logoutBtn" type="button" class="btn ghost small">Log out</button>
+        </div>
+      </div>
       <div class="brand">Freelance<span>Kit</span></div>
       <h1>Invoices &amp; contracts for freelancers, done in minutes</h1>
       <p class="sub">Build clean, printable invoices and receipts with FreelanceKit Pro. Generate a plain-English service contract or SOW with AI — one free draft a day.</p>
@@ -47,6 +57,7 @@
         <button class="btn primary sub-btn">Subscribe →</button>
       </section>
       <div class="card no-print" id="invoiceForm" style="display:none;">
+        <button class="manage-sub-btn no-print" type="button">Manage subscription →</button>
         <div class="grid2">
           <div>
             <label>Your business name</label>
@@ -97,6 +108,7 @@
         <button class="btn primary sub-btn">Subscribe →</button>
       </section>
       <div class="card no-print" id="receiptForm" style="display:none;">
+        <button class="manage-sub-btn no-print" type="button">Manage subscription →</button>
         <div class="grid2">
           <div>
             <label>Received by (your business)</label>

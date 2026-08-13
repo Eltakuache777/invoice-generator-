@@ -1,5 +1,87 @@
 const $ = (sel) => document.querySelector(sel);
 
+/* ---------- Account (email + magic link) ----------
+   Optional identity layer: logging in lets purchases follow you across devices instead
+   of being stuck to one browser's localStorage. Not logging in still works exactly like
+   before - licenses just stay local to the browser that bought them. */
+function getAccountToken() { return localStorage.getItem('fk_account_token') || ''; }
+function setAccountToken(t) { localStorage.setItem('fk_account_token', t); }
+function clearAccountToken() { localStorage.removeItem('fk_account_token'); }
+function getAccountEmail() { return localStorage.getItem('fk_account_email') || ''; }
+function setAccountEmail(e) { localStorage.setItem('fk_account_email', e); }
+function clearAccountEmail() { localStorage.removeItem('fk_account_email'); }
+
+function renderAccountBar() {
+  const email = getAccountEmail();
+  if (email) {
+    $('#loginForm').style.display = 'none';
+    $('#accountInfo').style.display = 'flex';
+    $('#accountEmailLabel').textContent = 'Logged in as ' + email;
+  } else {
+    $('#loginForm').style.display = 'flex';
+    $('#accountInfo').style.display = 'none';
+  }
+}
+
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = $('#loginEmail').value.trim();
+  const btn = $('#loginForm button');
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  try {
+    const r = await fetch('/api/auth/request-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await r.json();
+    if (data.sent) {
+      btn.textContent = 'Check your email →';
+    } else {
+      alert(data.error || 'Could not send login email.');
+      btn.disabled = false;
+      btn.textContent = 'Email me a login link';
+    }
+  } catch (err) {
+    alert('Network error sending login email.');
+    btn.disabled = false;
+    btn.textContent = 'Email me a login link';
+  }
+});
+
+$('#logoutBtn').addEventListener('click', () => {
+  clearAccountToken();
+  clearAccountEmail();
+  renderAccountBar();
+});
+
+async function handleLoginRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('login_token');
+  if (!token) return;
+  try {
+    const r = await fetch('/api/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    const data = await r.json();
+    if (data.accountToken) {
+      setAccountToken(data.accountToken);
+      setAccountEmail(data.email);
+      if (data.creditLicense) setLicenseKey(data.creditLicense);
+      if (data.subLicense) setSubLicenseKey(data.subLicense);
+      renderAccountBar();
+      checkSubscription();
+      renderBanner();
+    } else {
+      alert(data.error || 'This login link is invalid or has expired.');
+    }
+  } catch (e) { console.error(e); }
+  window.history.replaceState({}, '', window.location.pathname);
+}
+
 /* ---------- Pro subscription gate (Invoice Builder + Receipt Generator) ---------- */
 function getSubLicenseKey() { return localStorage.getItem('fk_sub_license') || ''; }
 function setSubLicenseKey(k) { localStorage.setItem('fk_sub_license', k); }
@@ -29,12 +111,43 @@ async function checkSubscription() {
   }
 }
 
+document.querySelectorAll('.manage-sub-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const key = getSubLicenseKey();
+    if (!key) return;
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    try {
+      const r = await fetch('/api/portal-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ licenseKey: key })
+      });
+      const data = await r.json();
+      if (data.url) window.location.href = data.url;
+      else {
+        alert(data.error || 'Could not open subscription management.');
+        btn.disabled = false;
+        btn.textContent = 'Manage subscription →';
+      }
+    } catch (e) {
+      alert('Network error opening subscription management.');
+      btn.disabled = false;
+      btn.textContent = 'Manage subscription →';
+    }
+  });
+});
+
 document.querySelectorAll('.sub-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     btn.textContent = 'Redirecting...';
     try {
-      const r = await fetch('/api/subscribe', { method: 'POST' });
+      const r = await fetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountToken: getAccountToken() })
+      });
       const data = await r.json();
       if (data.url) window.location.href = data.url;
       else {
@@ -354,7 +467,11 @@ $('#buyBtn').addEventListener('click', async () => {
   btn.disabled = true;
   btn.textContent = 'Redirecting...';
   try {
-    const r = await fetch('/api/checkout', { method: 'POST' });
+    const r = await fetch('/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountToken: getAccountToken() })
+    });
     const data = await r.json();
     if (data.url) window.location.href = data.url;
     else {
@@ -369,6 +486,8 @@ $('#buyBtn').addEventListener('click', async () => {
   }
 });
 
+renderAccountBar();
 loadConfig();
 checkSubscription();
 handleSuccessRedirect();
+handleLoginRedirect();

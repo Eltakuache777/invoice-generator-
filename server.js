@@ -27,8 +27,62 @@ function getClientIp(req) {
     .trim();
 }
 
+async function sendMagicLinkEmail(email, link) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('RESEND_API_KEY is not configured.');
+  const from = process.env.RESEND_FROM_EMAIL || 'FreelanceKit <onboarding@resend.dev>';
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from,
+      to: email,
+      subject: 'Log in to FreelanceKit',
+      html: `<p>Click below to log in to FreelanceKit on this device:</p><p><a href="${link}">${link}</a></p><p>This link expires in 15 minutes. If you didn't request this, you can ignore this email.</p>`
+    })
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error('Resend API error: ' + detail);
+  }
+}
+
 app.get('/api/config', (req, res) => {
   res.json({ freeDaily: FREE_DAILY, packPrice: PACK_PRICE, packCredits: PACK_CREDITS, subPrice: SUB_PRICE });
+});
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+app.post('/api/auth/request-link', async (req, res) => {
+  try {
+    const email = (req.body && req.body.email || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+    const token = store.createMagicLinkToken(email);
+    const link = `${PUBLIC_URL}/?login_token=${token}`;
+    await sendMagicLinkEmail(email, link);
+    res.json({ sent: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not send login email. Double check RESEND_API_KEY is set.' });
+  }
+});
+
+app.post('/api/auth/verify', (req, res) => {
+  try {
+    const { token } = req.body || {};
+    const email = token ? store.consumeMagicLinkToken(token) : null;
+    if (!email) {
+      return res.status(400).json({ error: 'This login link is invalid or has expired. Request a new one.' });
+    }
+    const accountToken = store.getOrCreateAccountToken(email);
+    const { creditLicense, subLicense } = store.getAccountLicenses(email);
+    res.json({ accountToken, email, creditLicense, subLicense });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not verify login link.' });
+  }
 });
 
 app.post('/api/generate-contract', async (req, res) => {
@@ -98,6 +152,8 @@ app.post('/api/checkout', async (req, res) => {
     if (!process.env.STRIPE_SECRET_KEY) {
       return res.status(500).json({ error: 'Stripe is not configured yet.' });
     }
+    const { accountToken } = req.body || {};
+    const accountEmail = accountToken ? store.getEmailForAccountToken(accountToken) : null;
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: [
@@ -110,6 +166,7 @@ app.post('/api/checkout', async (req, res) => {
           quantity: 1
         }
       ],
+      metadata: accountEmail ? { accountEmail } : {},
       success_url: `${PUBLIC_URL}/?purchase=credits&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${PUBLIC_URL}/`
     });
@@ -125,11 +182,23 @@ app.get('/api/verify-session', async (req, res) => {
     const { session_id } = req.query;
     if (!session_id) return res.status(400).json({ error: 'Missing session_id' });
     const session = await stripe.checkout.sessions.retrieve(session_id);
-    if (session.payment_status === 'paid') {
-      const licenseKey = store.createLicenseForSession(session_id, PACK_CREDITS);
-      return res.json({ paid: true, licenseKey, credits: store.getCredits(licenseKey) });
+    if (session.payment_status !== 'paid') {
+      return res.json({ paid: false });
     }
-    res.json({ paid: false });
+    const accountEmail = session.metadata && session.metadata.accountEmail;
+    let licenseKey;
+    if (accountEmail) {
+      // Logged-in purchase: top up the account's single credit license instead of
+      // minting a new, un-findable one - so repeat purchases and other devices see it.
+      licenseKey = store.getOrCreateAccountCreditLicense(accountEmail);
+      if (!store.wasSessionCredited(session_id)) {
+        store.addCredits(licenseKey, PACK_CREDITS);
+        store.markSessionCredited(session_id);
+      }
+    } else {
+      licenseKey = store.createLicenseForSession(session_id, PACK_CREDITS);
+    }
+    res.json({ paid: true, licenseKey, credits: store.getCredits(licenseKey) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not verify payment.' });
@@ -143,6 +212,8 @@ app.post('/api/subscribe', async (req, res) => {
     if (!process.env.STRIPE_SECRET_KEY) {
       return res.status(500).json({ error: 'Stripe is not configured yet.' });
     }
+    const { accountToken } = req.body || {};
+    const accountEmail = accountToken ? store.getEmailForAccountToken(accountToken) : null;
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [
@@ -156,6 +227,7 @@ app.post('/api/subscribe', async (req, res) => {
           quantity: 1
         }
       ],
+      metadata: accountEmail ? { accountEmail } : {},
       success_url: `${PUBLIC_URL}/?purchase=sub&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${PUBLIC_URL}/`
     });
@@ -174,6 +246,8 @@ app.get('/api/verify-subscription', async (req, res) => {
     const sub = session.subscription;
     if (sub && ACTIVE_SUB_STATUSES.includes(sub.status)) {
       const licenseKey = store.createSubscriptionForSession(session_id, sub.id);
+      const accountEmail = session.metadata && session.metadata.accountEmail;
+      if (accountEmail) store.setAccountSubLicense(accountEmail, licenseKey);
       return res.json({ active: true, licenseKey });
     }
     res.json({ active: false });
@@ -193,6 +267,23 @@ app.get('/api/subscription-status', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.json({ active: false });
+  }
+});
+
+app.post('/api/portal-session', async (req, res) => {
+  try {
+    const { licenseKey } = req.body || {};
+    const subId = licenseKey ? store.getStripeSubscriptionId(licenseKey) : null;
+    if (!subId) return res.status(400).json({ error: 'No active subscription found for this browser.' });
+    const sub = await stripe.subscriptions.retrieve(subId);
+    const portal = await stripe.billingPortal.sessions.create({
+      customer: sub.customer,
+      return_url: `${PUBLIC_URL}/`
+    });
+    res.json({ url: portal.url });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not open the subscription management page. If this is a live Stripe account, make sure the Customer Portal is activated at dashboard.stripe.com/settings/billing/portal.' });
   }
 });
 
