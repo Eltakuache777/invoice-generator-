@@ -28,10 +28,6 @@
   <header class="hero no-print">
     <div class="wrap">
       <div class="account-bar">
-        <form id="loginForm" class="account-form">
-          <input id="loginEmail" type="email" placeholder="you@example.com" required>
-          <button type="submit" class="btn ghost small">Email me a login link</button>
-        </form>
         <div id="accountInfo" class="account-info" style="display:none;">
           <span id="accountEmailLabel"></span>
           <button id="logoutBtn" type="button" class="btn ghost small">Log out</button>
@@ -40,7 +36,7 @@
       <div class="brand">Freelance<span>Kit</span></div>
       <h1>Invoices &amp; contracts for freelancers, done in minutes</h1>
       <p class="sub">Build clean, printable invoices and receipts with FreelanceKit Pro. Generate a plain-English service contract or SOW with AI — one free draft a day.</p>
-      <div class="tabs">
+      <div class="tabs" id="tabBar" style="display:none;">
         <button class="tab active" data-tab="invoice">Invoice Builder</button>
         <button class="tab" data-tab="receipt">Receipt Generator</button>
         <button class="tab" data-tab="contract">Contract Generator</button>
@@ -48,7 +44,19 @@
     </div>
   </header>
 
-  <main class="wrap">
+  <section id="authGate" class="wrap">
+    <div class="card" style="max-width:420px;margin:0 auto;text-align:center;">
+      <h2 style="margin-top:0;">Log in to use FreelanceKit</h2>
+      <p style="color:var(--muted);font-size:14px;">No password needed — enter your email and we'll send you a login link. New here? The same link creates your account.</p>
+      <form id="loginForm">
+        <input id="loginEmail" type="email" placeholder="you@example.com" required>
+        <button type="submit" class="btn primary">Email me a login link →</button>
+      </form>
+      <p id="loginStatus" style="color:var(--accent);font-size:13px;display:none;"></p>
+    </div>
+  </section>
+
+  <main class="wrap" id="appShell" style="display:none;">
     <!-- INVOICE BUILDER -->
     <section id="invoicePane">
       <section id="invoiceLocked" class="card pay no-print">

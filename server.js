@@ -20,6 +20,17 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || 'http://localhost:3001').replace(/
 
 const ACTIVE_SUB_STATUSES = ['active', 'trialing'];
 
+// Comma-separated list of emails that get unlimited free access to everything -
+// for you, the site owner, so you're not paying yourself for your own product.
+const OWNER_EMAILS = (process.env.OWNER_EMAIL || '')
+  .split(',')
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+function isOwnerEmail(email) {
+  return !!email && OWNER_EMAILS.includes(email.toLowerCase());
+}
+
 function getClientIp(req) {
   return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown')
     .toString()
@@ -78,16 +89,45 @@ app.post('/api/auth/verify', (req, res) => {
     }
     const accountToken = store.getOrCreateAccountToken(email);
     const { creditLicense, subLicense } = store.getAccountLicenses(email);
-    res.json({ accountToken, email, creditLicense, subLicense });
+    res.json({ accountToken, email, creditLicense, subLicense, isOwner: isOwnerEmail(email) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not verify login link.' });
   }
 });
 
+// Single source of truth the client polls on load: who is this, are they the owner
+// (unlimited everything), and do they have an active Invoice/Receipt subscription.
+app.get('/api/account-status', async (req, res) => {
+  try {
+    const { accountToken } = req.query;
+    const email = accountToken ? store.getEmailForAccountToken(accountToken) : null;
+    if (!email) return res.status(400).json({ error: 'Not logged in.' });
+
+    const owner = isOwnerEmail(email);
+    if (owner) return res.json({ email, isOwner: true, subscribed: true, freeLeft: FREE_DAILY, credits: 0 });
+
+    const { subLicense, creditLicense } = store.getAccountLicenses(email);
+    let subscribed = false;
+    if (subLicense) {
+      const subId = store.getStripeSubscriptionId(subLicense);
+      if (subId) {
+        const sub = await stripe.subscriptions.retrieve(subId);
+        subscribed = ACTIVE_SUB_STATUSES.includes(sub.status);
+      }
+    }
+    const credits = creditLicense ? store.getCredits(creditLicense) : 0;
+    const freeLeft = store.getFreeUsesLeft(email, FREE_DAILY);
+    res.json({ email, isOwner: false, subscribed, freeLeft, credits });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not check account status.' });
+  }
+});
+
 app.post('/api/generate-contract', async (req, res) => {
   try {
-    const { yourName, clientName, workDescription, paymentTerms, contractType, licenseKey } = req.body || {};
+    const { yourName, clientName, workDescription, paymentTerms, contractType, licenseKey, accountToken } = req.body || {};
     if (!yourName || !clientName || !workDescription) {
       return res.status(400).json({ error: 'Please fill in your name, the client name, and a description of the work.' });
     }
@@ -95,20 +135,30 @@ app.post('/api/generate-contract', async (req, res) => {
       return res.status(400).json({ error: 'That description is too long. Please trim it down.' });
     }
 
-    const ip = getClientIp(req);
+    const accountEmail = accountToken ? store.getEmailForAccountToken(accountToken) : null;
+    const owner = isOwnerEmail(accountEmail);
+
+    // Logged in: track free-daily-use and credits against the account (survives switching
+    // devices/networks). Not logged in (shouldn't normally happen behind the login gate,
+    // but kept as a safe fallback): track against IP like before.
+    const freeUseKey = accountEmail || getClientIp(req);
+    const effectiveLicenseKey = accountEmail ? (store.getAccountLicenses(accountEmail).creditLicense || licenseKey) : licenseKey;
+
     let usedCredit = false;
-    if (licenseKey && store.getCredits(licenseKey) > 0) {
-      store.useCredit(licenseKey);
+    if (owner) {
+      // Site owner: unlimited, doesn't touch credits or the free-daily counter.
+    } else if (effectiveLicenseKey && store.getCredits(effectiveLicenseKey) > 0) {
+      store.useCredit(effectiveLicenseKey);
       usedCredit = true;
     } else {
-      const freeLeft = store.getFreeUsesLeft(ip, FREE_DAILY);
+      const freeLeft = store.getFreeUsesLeft(freeUseKey, FREE_DAILY);
       if (freeLeft <= 0) {
         return res.status(402).json({
           error: 'PAYMENT_REQUIRED',
           message: "You've used today's free contract generation. Buy a credit pack to keep going."
         });
       }
-      store.recordFreeUse(ip);
+      store.recordFreeUse(freeUseKey);
     }
 
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -272,9 +322,11 @@ app.get('/api/subscription-status', async (req, res) => {
 
 app.post('/api/portal-session', async (req, res) => {
   try {
-    const { licenseKey } = req.body || {};
-    const subId = licenseKey ? store.getStripeSubscriptionId(licenseKey) : null;
-    if (!subId) return res.status(400).json({ error: 'No active subscription found for this browser.' });
+    const { accountToken } = req.body || {};
+    const accountEmail = accountToken ? store.getEmailForAccountToken(accountToken) : null;
+    const { subLicense } = accountEmail ? store.getAccountLicenses(accountEmail) : { subLicense: null };
+    const subId = subLicense ? store.getStripeSubscriptionId(subLicense) : null;
+    if (!subId) return res.status(400).json({ error: 'No active subscription found for this account.' });
     const sub = await stripe.subscriptions.retrieve(subId);
     const portal = await stripe.billingPortal.sessions.create({
       customer: sub.customer,

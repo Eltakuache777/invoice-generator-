@@ -14,21 +14,30 @@ function clearAccountEmail() { localStorage.removeItem('fk_account_email'); }
 function renderAccountBar() {
   const email = getAccountEmail();
   if (email) {
-    $('#loginForm').style.display = 'none';
     $('#accountInfo').style.display = 'flex';
-    $('#accountEmailLabel').textContent = 'Logged in as ' + email;
+    $('#accountEmailLabel').textContent = isOwner ? email + ' (owner)' : email;
   } else {
-    $('#loginForm').style.display = 'flex';
     $('#accountInfo').style.display = 'none';
   }
+}
+
+// Login is required to use anything past this point - so purchases and free-generation
+// counts are always tied to an account instead of a browser that can lose its localStorage.
+function renderAppGate() {
+  const loggedIn = !!getAccountEmail();
+  $('#authGate').style.display = loggedIn ? 'none' : 'block';
+  $('#appShell').style.display = loggedIn ? 'block' : 'none';
+  $('#tabBar').style.display = loggedIn ? 'flex' : 'none';
 }
 
 $('#loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const email = $('#loginEmail').value.trim();
   const btn = $('#loginForm button');
+  const status = $('#loginStatus');
   btn.disabled = true;
   btn.textContent = 'Sending...';
+  status.style.display = 'none';
   try {
     const r = await fetch('/api/auth/request-link', {
       method: 'POST',
@@ -37,16 +46,16 @@ $('#loginForm').addEventListener('submit', async (e) => {
     });
     const data = await r.json();
     if (data.sent) {
-      btn.textContent = 'Check your email →';
+      status.textContent = 'Check your email for a login link.';
+      status.style.display = 'block';
     } else {
       alert(data.error || 'Could not send login email.');
-      btn.disabled = false;
-      btn.textContent = 'Email me a login link';
     }
   } catch (err) {
     alert('Network error sending login email.');
+  } finally {
     btn.disabled = false;
-    btn.textContent = 'Email me a login link';
+    btn.textContent = 'Email me a login link →';
   }
 });
 
@@ -54,6 +63,7 @@ $('#logoutBtn').addEventListener('click', () => {
   clearAccountToken();
   clearAccountEmail();
   renderAccountBar();
+  renderAppGate();
 });
 
 async function handleLoginRedirect() {
@@ -70,11 +80,9 @@ async function handleLoginRedirect() {
     if (data.accountToken) {
       setAccountToken(data.accountToken);
       setAccountEmail(data.email);
-      if (data.creditLicense) setLicenseKey(data.creditLicense);
-      if (data.subLicense) setSubLicenseKey(data.subLicense);
       renderAccountBar();
-      checkSubscription();
-      renderBanner();
+      renderAppGate();
+      await checkAccountStatus();
     } else {
       alert(data.error || 'This login link is invalid or has expired.');
     }
@@ -83,9 +91,9 @@ async function handleLoginRedirect() {
 }
 
 /* ---------- Pro subscription gate (Invoice Builder + Receipt Generator) ---------- */
-function getSubLicenseKey() { return localStorage.getItem('fk_sub_license') || ''; }
-function setSubLicenseKey(k) { localStorage.setItem('fk_sub_license', k); }
-function clearSubLicenseKey() { localStorage.removeItem('fk_sub_license'); }
+let isOwner = false;
+let accountFreeLeft = null;
+let accountCredits = 0;
 
 function renderSubGate(active) {
   $('#invoiceForm').style.display = active ? 'block' : 'none';
@@ -94,17 +102,23 @@ function renderSubGate(active) {
   $('#receiptLocked').style.display = active ? 'none' : 'block';
 }
 
-async function checkSubscription() {
-  const key = getSubLicenseKey();
-  if (!key) {
+// Single account-status check drives both the Pro paywall and the contract-generator
+// banner, so both always reflect the account's real state instead of stale local guesses.
+async function checkAccountStatus() {
+  const token = getAccountToken();
+  if (!token) {
     renderSubGate(false);
     return;
   }
   try {
-    const r = await fetch('/api/subscription-status?licenseKey=' + encodeURIComponent(key));
+    const r = await fetch('/api/account-status?accountToken=' + encodeURIComponent(token));
     const data = await r.json();
-    if (!data.active) clearSubLicenseKey();
-    renderSubGate(!!data.active);
+    isOwner = !!data.isOwner;
+    accountFreeLeft = typeof data.freeLeft === 'number' ? data.freeLeft : null;
+    accountCredits = data.credits || 0;
+    renderSubGate(!!data.subscribed);
+    renderAccountBar();
+    renderBanner();
   } catch (e) {
     // Network hiccup: don't lock out someone who's already paid based on a failed check.
     renderSubGate(true);
@@ -113,15 +127,13 @@ async function checkSubscription() {
 
 document.querySelectorAll('.manage-sub-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
-    const key = getSubLicenseKey();
-    if (!key) return;
     btn.disabled = true;
     btn.textContent = 'Loading...';
     try {
       const r = await fetch('/api/portal-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ licenseKey: key })
+        body: JSON.stringify({ accountToken: getAccountToken() })
       });
       const data = await r.json();
       if (data.url) window.location.href = data.url;
@@ -336,12 +348,6 @@ $('#printBtnR').addEventListener('click', () => {
 /* ---------- Contract generator (free daily limit, then paid credits) ---------- */
 let config = { freeDaily: 1, packPrice: 12, packCredits: 15 };
 
-function getLicenseKey() { return localStorage.getItem('fk_license') || ''; }
-function setLicenseKey(k) { localStorage.setItem('fk_license', k); }
-function todayCountKey() { return 'fk_used_' + new Date().toISOString().slice(0, 10); }
-function getLocalFreeUsedToday() { return parseInt(localStorage.getItem(todayCountKey()) || '0', 10); }
-function bumpLocalFreeUsedToday() { localStorage.setItem(todayCountKey(), String(getLocalFreeUsedToday() + 1)); }
-
 async function loadConfig() {
   try {
     const r = await fetch('/api/config');
@@ -353,14 +359,19 @@ async function loadConfig() {
   } catch (e) {}
 }
 
+// Reflects whatever /api/account-status last reported - the account is the source of
+// truth, not anything guessed from localStorage, so this stays correct across devices
+// and survives a plain page refresh even if server data gets reset.
 function renderBanner() {
-  const used = getLocalFreeUsedToday();
-  const left = Math.max(0, config.freeDaily - used);
   const banner = $('#freeBanner');
-  if (getLicenseKey()) {
-    banner.textContent = 'You have paid credits available on this browser.';
+  if (isOwner) {
+    banner.textContent = 'Owner account — unlimited contract generations.';
+  } else if (accountCredits > 0) {
+    banner.textContent = `You have ${accountCredits} paid credit(s) on your account.`;
+  } else if (accountFreeLeft !== null) {
+    banner.textContent = `${accountFreeLeft} of ${config.freeDaily} free contract generation(s) left today.`;
   } else {
-    banner.textContent = `${left} of ${config.freeDaily} free contract generation(s) left today.`;
+    banner.textContent = `${config.freeDaily} free contract generation(s) available today.`;
   }
 }
 
@@ -374,23 +385,21 @@ async function handleSuccessRedirect() {
     if (purchase === 'sub') {
       const r = await fetch('/api/verify-subscription?session_id=' + encodeURIComponent(sessionId));
       const data = await r.json();
-      if (data.active && data.licenseKey) {
-        setSubLicenseKey(data.licenseKey);
-        renderSubGate(true);
-        alert('Subscription active! Invoice Builder and Receipt Generator are now unlocked on this browser.');
+      if (data.active) {
+        await checkAccountStatus();
+        alert('Subscription active! Invoice Builder and Receipt Generator are now unlocked on your account.');
       }
     } else {
       const r = await fetch('/api/verify-session?session_id=' + encodeURIComponent(sessionId));
       const data = await r.json();
-      if (data.paid && data.licenseKey) {
-        setLicenseKey(data.licenseKey);
-        alert(`Payment received! ${data.credits} credits added to this browser. Save code ${data.licenseKey} in case you switch devices.`);
+      if (data.paid) {
+        await checkAccountStatus();
+        alert(`Payment received! ${data.credits} credit(s) now on your account.`);
         document.querySelector('.tab[data-tab="contract"]').click();
       }
     }
   } catch (e) { console.error(e); }
   window.history.replaceState({}, '', window.location.pathname);
-  renderBanner();
 }
 
 $('#genContractBtn').addEventListener('click', async () => {
@@ -417,13 +426,13 @@ $('#genContractBtn').addEventListener('click', async () => {
     const res = await fetch('/api/generate-contract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ yourName, clientName, workDescription, paymentTerms, contractType, licenseKey: getLicenseKey() })
+      body: JSON.stringify({ yourName, clientName, workDescription, paymentTerms, contractType, accountToken: getAccountToken() })
     });
     const data = await res.json();
 
     if (res.status === 402) {
       $('#payCard').style.display = 'block';
-      renderBanner();
+      await checkAccountStatus();
       return;
     }
     if (!res.ok) {
@@ -432,11 +441,10 @@ $('#genContractBtn').addEventListener('click', async () => {
       return;
     }
 
-    if (!data.usedCredit) bumpLocalFreeUsedToday();
     $('#contractOut').textContent = data.contract;
     $('#contractResult').style.display = 'block';
     $('#contractResult').scrollIntoView({ behavior: 'smooth' });
-    renderBanner();
+    await checkAccountStatus();
   } catch (e) {
     errorBox.textContent = 'Network error. Please try again.';
     errorBox.style.display = 'block';
@@ -487,7 +495,8 @@ $('#buyBtn').addEventListener('click', async () => {
 });
 
 renderAccountBar();
+renderAppGate();
 loadConfig();
-checkSubscription();
+checkAccountStatus();
 handleSuccessRedirect();
 handleLoginRedirect();
