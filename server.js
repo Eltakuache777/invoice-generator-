@@ -70,13 +70,19 @@ app.post('/api/auth/request-link', async (req, res) => {
     if (!EMAIL_RE.test(email)) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
+    if (!store.canRequestMagicLink(email)) {
+      return res.status(429).json({ error: 'Please wait a bit before requesting another login link.' });
+    }
     const token = store.createMagicLinkToken(email);
     const link = `${PUBLIC_URL}/?login_token=${token}`;
+    store.recordMagicLinkRequest(email);
     await sendMagicLinkEmail(email, link);
     res.json({ sent: true });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Could not send login email. Double check RESEND_API_KEY is set.' });
+    // Surfacing the real reason (not just a generic guess) since this exact step has
+    // been the hardest thing to debug without shell access to check Render's logs.
+    res.status(500).json({ error: 'Could not send login email: ' + err.message });
   }
 });
 
