@@ -102,6 +102,33 @@ app.post('/api/auth/verify', (req, res) => {
   }
 });
 
+// If local data doesn't show an active subscription for this email, double-check
+// directly with Stripe before concluding they're not subscribed - protects real
+// paying customers from getting locked out just because Render's disk got wiped.
+async function checkSubscribed(email) {
+  const { subLicense } = store.getAccountLicenses(email);
+  if (subLicense) {
+    const subId = store.getStripeSubscriptionId(subLicense);
+    if (subId) {
+      const sub = await stripe.subscriptions.retrieve(subId);
+      if (ACTIVE_SUB_STATUSES.includes(sub.status)) return true;
+    }
+  }
+  try {
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (customers.data.length) {
+      const subs = await stripe.subscriptions.list({ customer: customers.data[0].id, status: 'active', limit: 1 });
+      if (subs.data.length) {
+        store.linkRecoveredSubscription(email, subs.data[0].id);
+        return true;
+      }
+    }
+  } catch (err) {
+    console.error('Stripe subscription recovery check failed:', err);
+  }
+  return false;
+}
+
 // Single source of truth the client polls on load: who is this, are they the owner
 // (unlimited everything), and do they have an active Invoice/Receipt subscription.
 app.get('/api/account-status', async (req, res) => {
@@ -113,15 +140,8 @@ app.get('/api/account-status', async (req, res) => {
     const owner = isOwnerEmail(email);
     if (owner) return res.json({ email, isOwner: true, subscribed: true, freeLeft: FREE_DAILY, credits: 0 });
 
-    const { subLicense, creditLicense } = store.getAccountLicenses(email);
-    let subscribed = false;
-    if (subLicense) {
-      const subId = store.getStripeSubscriptionId(subLicense);
-      if (subId) {
-        const sub = await stripe.subscriptions.retrieve(subId);
-        subscribed = ACTIVE_SUB_STATUSES.includes(sub.status);
-      }
-    }
+    const subscribed = await checkSubscribed(email);
+    const { creditLicense } = store.getAccountLicenses(email);
     const credits = creditLicense ? store.getCredits(creditLicense) : 0;
     const freeLeft = store.getFreeUsesLeft(email, FREE_DAILY);
     res.json({ email, isOwner: false, subscribed, freeLeft, credits });

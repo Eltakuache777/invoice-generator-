@@ -112,6 +112,20 @@ async function checkAccountStatus() {
   }
   try {
     const r = await fetch('/api/account-status?accountToken=' + encodeURIComponent(token));
+    if (r.status === 400) {
+      // Server no longer recognizes this account token (e.g. its data got reset) - rather
+      // than silently stranding someone behind a locked paywall with no explanation, send
+      // them back to the login gate. Logging in again with the same email re-establishes
+      // their identity, and any real Stripe subscription gets auto-recovered server-side.
+      clearAccountToken();
+      clearAccountEmail();
+      renderAccountBar();
+      renderAppGate();
+      const status = $('#loginStatus');
+      status.textContent = "You've been signed out (your session expired). Log in again to pick up right where you left off.";
+      status.style.display = 'block';
+      return;
+    }
     const data = await r.json();
     isOwner = !!data.isOwner;
     accountFreeLeft = typeof data.freeLeft === 'number' ? data.freeLeft : null;
