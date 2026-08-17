@@ -107,6 +107,15 @@ function renderSubGate(active) {
 async function checkAccountStatus() {
   const token = getAccountToken();
   if (!token) {
+    // Defensive: if only the email half of the account survived (partial localStorage
+    // loss) but not the token, don't leave the shell showing as if logged in with a
+    // permanently-locked paywall - send them back to a clean login state instead.
+    if (getAccountEmail()) {
+      clearAccountToken();
+      clearAccountEmail();
+      renderAccountBar();
+      renderAppGate();
+    }
     renderSubGate(false);
     return;
   }

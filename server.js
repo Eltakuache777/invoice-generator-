@@ -105,13 +105,14 @@ app.post('/api/auth/verify', (req, res) => {
 // If local data doesn't show an active subscription for this email, double-check
 // directly with Stripe before concluding they're not subscribed - protects real
 // paying customers from getting locked out just because Render's disk got wiped.
-async function checkSubscribed(email) {
+// Returns the active Stripe subscription id, or null if there genuinely isn't one.
+async function findActiveSubscriptionId(email) {
   const { subLicense } = store.getAccountLicenses(email);
   if (subLicense) {
     const subId = store.getStripeSubscriptionId(subLicense);
     if (subId) {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (ACTIVE_SUB_STATUSES.includes(sub.status)) return true;
+      if (ACTIVE_SUB_STATUSES.includes(sub.status)) return subId;
     }
   }
   try {
@@ -120,13 +121,13 @@ async function checkSubscribed(email) {
       const subs = await stripe.subscriptions.list({ customer: customers.data[0].id, status: 'active', limit: 1 });
       if (subs.data.length) {
         store.linkRecoveredSubscription(email, subs.data[0].id);
-        return true;
+        return subs.data[0].id;
       }
     }
   } catch (err) {
     console.error('Stripe subscription recovery check failed:', err);
   }
-  return false;
+  return null;
 }
 
 // Single source of truth the client polls on load: who is this, are they the owner
@@ -140,7 +141,7 @@ app.get('/api/account-status', async (req, res) => {
     const owner = isOwnerEmail(email);
     if (owner) return res.json({ email, isOwner: true, subscribed: true, freeLeft: FREE_DAILY, credits: 0 });
 
-    const subscribed = await checkSubscribed(email);
+    const subscribed = !!(await findActiveSubscriptionId(email));
     const { creditLicense } = store.getAccountLicenses(email);
     const credits = creditLicense ? store.getCredits(creditLicense) : 0;
     const freeLeft = store.getFreeUsesLeft(email, FREE_DAILY);
@@ -333,25 +334,11 @@ app.get('/api/verify-subscription', async (req, res) => {
   }
 });
 
-app.get('/api/subscription-status', async (req, res) => {
-  try {
-    const { licenseKey } = req.query;
-    const subId = licenseKey ? store.getStripeSubscriptionId(licenseKey) : null;
-    if (!subId) return res.json({ active: false });
-    const sub = await stripe.subscriptions.retrieve(subId);
-    res.json({ active: ACTIVE_SUB_STATUSES.includes(sub.status) });
-  } catch (err) {
-    console.error(err);
-    res.json({ active: false });
-  }
-});
-
 app.post('/api/portal-session', async (req, res) => {
   try {
     const { accountToken } = req.body || {};
     const accountEmail = accountToken ? store.getEmailForAccountToken(accountToken) : null;
-    const { subLicense } = accountEmail ? store.getAccountLicenses(accountEmail) : { subLicense: null };
-    const subId = subLicense ? store.getStripeSubscriptionId(subLicense) : null;
+    const subId = accountEmail ? await findActiveSubscriptionId(accountEmail) : null;
     if (!subId) return res.status(400).json({ error: 'No active subscription found for this account.' });
     const sub = await stripe.subscriptions.retrieve(subId);
     const portal = await stripe.billingPortal.sessions.create({
