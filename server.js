@@ -130,6 +130,31 @@ async function findActiveSubscriptionId(email) {
   return null;
 }
 
+// Credit packs are one-time payments, not an ongoing Stripe object like a subscription,
+// so there's no "is this customer still subscribed" flag to fall back on. Instead every
+// credit-pack checkout tags its underlying PaymentIntent with metadata.accountEmail
+// (Checkout Sessions themselves aren't searchable via Stripe's API, but PaymentIntents
+// are), and if local data doesn't show a purchase we know about, we search Stripe
+// directly and credit anything that hasn't been applied yet. Safe to re-run -
+// wasSessionCredited guards against crediting the same payment twice.
+async function recoverCreditsFromStripe(email) {
+  try {
+    const escaped = email.replace(/'/g, "\\'");
+    const intents = await stripe.paymentIntents.search({
+      query: `metadata['accountEmail']:'${escaped}' and status:'succeeded'`,
+      limit: 100
+    });
+    for (const intent of intents.data) {
+      if (store.wasSessionCredited(intent.id)) continue;
+      const licenseKey = store.getOrCreateAccountCreditLicense(email);
+      store.addCredits(licenseKey, PACK_CREDITS);
+      store.markSessionCredited(intent.id);
+    }
+  } catch (err) {
+    console.error('Stripe credit recovery check failed:', err);
+  }
+}
+
 // Single source of truth the client polls on load: who is this, are they the owner
 // (unlimited everything), and do they have an active Invoice/Receipt subscription.
 app.get('/api/account-status', async (req, res) => {
@@ -142,6 +167,7 @@ app.get('/api/account-status', async (req, res) => {
     if (owner) return res.json({ email, isOwner: true, subscribed: true, freeLeft: FREE_DAILY, credits: 0 });
 
     const subscribed = !!(await findActiveSubscriptionId(email));
+    await recoverCreditsFromStripe(email);
     const { creditLicense } = store.getAccountLicenses(email);
     const credits = creditLicense ? store.getCredits(creditLicense) : 0;
     const freeLeft = store.getFreeUsesLeft(email, FREE_DAILY);
@@ -169,7 +195,7 @@ app.post('/api/generate-contract', async (req, res) => {
     // devices/networks). Not logged in (shouldn't normally happen behind the login gate,
     // but kept as a safe fallback): track against IP like before.
     const freeUseKey = accountEmail || getClientIp(req);
-    const effectiveLicenseKey = accountEmail ? (store.getAccountLicenses(accountEmail).creditLicense || licenseKey) : licenseKey;
+    let effectiveLicenseKey = accountEmail ? (store.getAccountLicenses(accountEmail).creditLicense || licenseKey) : licenseKey;
 
     let usedCredit = false;
     if (owner) {
@@ -178,14 +204,25 @@ app.post('/api/generate-contract', async (req, res) => {
       store.useCredit(effectiveLicenseKey);
       usedCredit = true;
     } else {
-      const freeLeft = store.getFreeUsesLeft(freeUseKey, FREE_DAILY);
-      if (freeLeft <= 0) {
-        return res.status(402).json({
-          error: 'PAYMENT_REQUIRED',
-          message: "You've used today's free contract generation. Buy a credit pack to keep going."
-        });
+      // Local data says no credits - before actually blocking them, check whether Stripe
+      // has a paid credit-pack session for this account that local data lost track of.
+      if (accountEmail) {
+        await recoverCreditsFromStripe(accountEmail);
+        effectiveLicenseKey = store.getAccountLicenses(accountEmail).creditLicense || effectiveLicenseKey;
       }
-      store.recordFreeUse(freeUseKey);
+      if (effectiveLicenseKey && store.getCredits(effectiveLicenseKey) > 0) {
+        store.useCredit(effectiveLicenseKey);
+        usedCredit = true;
+      } else {
+        const freeLeft = store.getFreeUsesLeft(freeUseKey, FREE_DAILY);
+        if (freeLeft <= 0) {
+          return res.status(402).json({
+            error: 'PAYMENT_REQUIRED',
+            message: "You've used today's free contract generation. Buy a credit pack to keep going."
+          });
+        }
+        store.recordFreeUse(freeUseKey);
+      }
     }
 
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -244,6 +281,10 @@ app.post('/api/checkout', async (req, res) => {
         }
       ],
       metadata: accountEmail ? { accountEmail } : {},
+      // Also tag the underlying PaymentIntent (not just the Checkout Session) - Checkout
+      // Sessions aren't searchable via Stripe's API, but PaymentIntents are, and that's
+      // what recoverCreditsFromStripe() below queries to rebuild a lost credit balance.
+      payment_intent_data: accountEmail ? { metadata: { accountEmail } } : undefined,
       success_url: `${PUBLIC_URL}/?purchase=credits&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${PUBLIC_URL}/`
     });
